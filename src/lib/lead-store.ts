@@ -5,6 +5,7 @@ export interface Lead {
   email: string;
   industry: string;
   submitted_at: string;
+  emailSent?: boolean; // Optional flag to track if confirmation email was sent
 }
 
 interface LeadStore {
@@ -30,9 +31,18 @@ export const useLeadStore = create<LeadStore>((set, get) => ({
 
   addLead: (lead: Lead) => {
     try {
+      // Set loading state
+      set({ isLoading: true });
+      
       // Validate lead data
-      if (!lead.name || !lead.email) {
-        throw new Error('Invalid lead data: name and email are required');
+      if (!lead.name || !lead.email || !lead.industry) {
+        throw new Error('Invalid lead data: name, email, and industry are required');
+      }
+
+      // Validate email format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(lead.email)) {
+        throw new Error('Invalid email format');
       }
 
       // Check for duplicate email in current session
@@ -44,10 +54,13 @@ export const useLeadStore = create<LeadStore>((set, get) => ({
       set((state) => ({
         sessionLeads: [...state.sessionLeads, lead],
         error: null, // Clear any previous errors
+        submitted: true,
+        isLoading: false
       }));
     } catch (error) {
       set({ 
-        error: error instanceof Error ? error.message : 'Failed to add lead' 
+        error: error instanceof Error ? error.message : 'Failed to add lead',
+        isLoading: false
       });
       console.error('Error adding lead:', error);
     }

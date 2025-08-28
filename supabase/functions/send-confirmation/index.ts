@@ -2,10 +2,14 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { Resend } from "npm:resend@2.0.0";
 
-const resend = new Resend(Deno.env.get("RESEND_PUBLIC_KEY") || "invalid_key");
+// Get API key from environment variables
+const resendApiKey = Deno.env.get("RESEND_PUBLIC_KEY");
 
+// CORS headers configuration
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": Deno.env.get("ENVIRONMENT") === "production" 
+    ? "https://your-production-domain.com" 
+    : "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
@@ -55,9 +59,47 @@ const handler = async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+  
+  // Check if Resend API key is available
+  if (!resendApiKey) {
+    console.error("RESEND_PUBLIC_KEY is not set in environment variables");
+    return new Response(
+      JSON.stringify({ error: "Email service configuration error" }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      }
+    );
+  }
+  
+  // Initialize Resend client
+  const resend = new Resend(resendApiKey);
 
   try {
     const { name, email, industry }: ConfirmationEmailRequest = await req.json();
+    
+    // Server-side validation
+    if (!name || !email || !industry) {
+      return new Response(
+        JSON.stringify({ error: "Missing required fields" }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        }
+      );
+    }
+    
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return new Response(
+        JSON.stringify({ error: "Invalid email format" }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        }
+      );
+    }
 
     console.log(`Generating personalized email for ${name} from ${industry} industry`);
 
@@ -78,7 +120,7 @@ const handler = async (req: Request): Promise<Response> => {
           
           <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px; color: white; margin-bottom: 30px;">
             <div style="font-size: 18px; line-height: 1.6;">
-              ${personalizedContent ? personalizedContent.replace(/\n/g, '<br>') : 'Welcome to our innovation community!'}
+              ${personalizedContent && typeof personalizedContent === 'string' ? personalizedContent.replace(/\n/g, '<br>') : 'Welcome to our innovation community!'}
             </div>
           </div>
           

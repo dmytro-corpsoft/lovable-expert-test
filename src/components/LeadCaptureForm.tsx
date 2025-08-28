@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Mail, User, CheckCircle, Building2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,15 +10,7 @@ import { useLeadStore } from '@/lib/lead-store';
 export const LeadCaptureForm = () => {
   const [formData, setFormData] = useState({ name: '', email: '', industry: '' });
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
-  const [submitted, setSubmitted] = useState(false);
-  const [leads, setLeads] = useState<
-    Array<{ name: string; email: string; industry: string; submitted_at: string }>
-  >([]);
-  const { addLead, error: storeError, clearError, isLoading, setLoading } = useLeadStore();
-
-  useEffect(() => {
-    setSubmitted(false);
-  }, []);
+  const { addLead, sessionLeads, submitted, setSubmitted, error: storeError, clearError, isLoading, setLoading } = useLeadStore();
   const getFieldError = (field: string) => {
     return validationErrors.find(error => error.field === field)?.message;
   };
@@ -31,25 +23,6 @@ export const LeadCaptureForm = () => {
     setValidationErrors(errors);
 
     if (errors.length === 0) {
-      // Send confirmation email
-      try {
-        const { error: emailError } = await supabase.functions.invoke('send-confirmation', {
-          body: {
-            name: formData.name,
-            email: formData.email,
-            industry: formData.industry,
-          },
-        });
-
-        if (emailError) {
-          console.error('Error sending confirmation email:', emailError);
-        } else {
-          console.log('Confirmation email sent successfully');
-        }
-      } catch (emailError) {
-        console.error('Error calling email function:', emailError);
-      }
-
       const lead = {
         name: formData.name,
         email: formData.email,
@@ -57,11 +30,66 @@ export const LeadCaptureForm = () => {
         submitted_at: new Date().toISOString(), 
       };
       
-      // Use the store's addLead method which includes validation
-      addLead(lead);
+      // Save lead to Supabase database
+      try {
+        // Add timeout for database request
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 seconds timeout
+        
+        const { error: dbError } = await supabase
+          .from('leads')
+          .insert([{
+            name: formData.name,
+            email: formData.email,
+            industry: formData.industry,
+            submitted_at: new Date().toISOString()
+          }])
+          .abortSignal(controller.signal);
+          
+        clearTimeout(timeoutId);
+        
+        if (dbError) {
+          console.error('Error saving lead to database:', dbError);
+          throw new Error(`Database error: ${dbError.message}`);
+        }
+        
+        // Send confirmation email only after successful database insertion
+        try {
+          const emailController = new AbortController();
+          const emailTimeoutId = setTimeout(() => emailController.abort(), 10000); // 10 seconds timeout
+          
+          const { error: emailError, data: emailData } = await supabase.functions.invoke('send-confirmation', {
+            body: {
+              name: formData.name,
+              email: formData.email,
+              industry: formData.industry,
+            },
+            signal: emailController.signal
+          });
+  
+          clearTimeout(emailTimeoutId);
+  
+          if (emailError) {
+            console.error('Error sending confirmation email:', emailError);
+            // Still add lead but mark email as not sent
+            addLead({...lead, emailSent: false});
+          } else {
+            console.log('Confirmation email sent successfully:', emailData);
+            // Add lead with successful email flag
+            addLead({...lead, emailSent: true});
+          }
+        } catch (emailError) {
+          console.error('Email sending failed:', emailError);
+          // Still add lead to store despite email failure
+          addLead({...lead, emailSent: false});
+        }
+      } catch (error) {
+        console.error('Error in submission process:', error);
+        setLoading(false);
+        return; // Stop execution if there's an error
+      }
       
-      // Update local state
-      setLeads([...leads, lead]);
+      // Reset form
       setSubmitted(true);
       setFormData({ name: '', email: '', industry: '' });
     }
@@ -93,7 +121,7 @@ export const LeadCaptureForm = () => {
           </p>
 
           <p className="text-sm text-accent mb-8">
-            You're #{leads.length} in this session
+            You're #{sessionLeads.length} in this session
           </p>
 
           <div className="space-y-4">
